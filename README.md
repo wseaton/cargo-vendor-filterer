@@ -62,6 +62,12 @@ key `workspace.metadata.vendor-filter`.
   and `*` wildcards are supported.  For example, `*-unknown-linux-gnu`.
 - `tier`: This can be either "1" or "2".  It may be specified in addition to `platforms`.
 - `all-features`: Enable all features of the current crate when vendoring.
+- `packages`: Keep only crates reachable from these workspace packages, as
+  resolved by `cargo tree -p` for each package and platform. `features`,
+  `no-default-features` and `all-features` apply to every listed package,
+  except `member/feature` for a listed member, which applies to that member only.
+  For example, `packages = ["server", "operator"]` with `no-default-features = true`
+  and `features = ["openssl"]`. Cannot be combined with `--sync`.
 - `keep-dep-kinds`: Specify which dependencies kinds to keep.
   Can be one of: all, normal, build, dev, no-normal, no-build, no-dev
 - `exclude-crate-paths`: Remove files and directories from target crates.  A key

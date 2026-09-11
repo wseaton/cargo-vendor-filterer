@@ -73,6 +73,9 @@ pub(crate) struct VendorOptions<'a, 'b, 'c, 'd, 'e, 'f> {
     pub versioned_dirs: bool,
     pub keep_dep_kinds: Option<&'static str>,
     pub current_dir: Option<&'f Utf8Path>,
+    pub packages: &'static [&'static str],
+    pub features: &'static [&'static str],
+    pub no_default_features: bool,
 }
 
 /// Run a vendoring process
@@ -111,6 +114,15 @@ pub(crate) fn vendor(options: VendorOptions) -> Result<Output> {
     }
     if let Some(keep_dep_kinds) = options.keep_dep_kinds {
         cmd.args(["--keep-dep-kinds", keep_dep_kinds]);
+    }
+    for package in options.packages {
+        cmd.args(["--package", package]);
+    }
+    for feature in options.features {
+        cmd.args(["--features", feature]);
+    }
+    if options.no_default_features {
+        cmd.arg("--no-default-features");
     }
     if let Some(output) = options.output {
         cmd.arg(output);
@@ -174,6 +186,21 @@ pub(crate) fn verify_no_macos(dir: &Utf8Path) {
     // check that only one file exists
     macos_lib.pop();
     assert_eq!(macos_lib.read_dir_utf8().unwrap().count(), 1);
+}
+
+pub(crate) fn verify_crate_is_stub(output_folder: &Utf8Path, name: &str) {
+    let crate_dir = output_folder.join(name);
+    assert!(
+        crate_dir.exists(),
+        "Package {name} does not show up in the vendor dir"
+    );
+    let crate_lib = crate_dir.join("src/lib.rs");
+    assert_eq!(
+        crate_lib.metadata().unwrap().len(),
+        0,
+        "Package {name} was kept, when it should have been filtered out!"
+    );
+    assert_eq!(crate_dir.join("src").read_dir_utf8().unwrap().count(), 1);
 }
 
 pub(crate) fn verify_crate_is_no_stub(output_folder: &Utf8Path, name: &str) {
