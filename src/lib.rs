@@ -58,6 +58,10 @@ pub const UNWANTED_PACKAGE_KEYS: &[&str] = &["links", "build"];
 /// The path to the stub library file we write
 const STUB_LIBRS: &str = "src/lib.rs";
 
+/// The contents of the stub library file
+pub const STUB_LIBRS_CONTENTS: &str =
+    "compile_error!(\"this crate was replaced with a stub by cargo-vendor-filterer\");\n";
+
 /// This is the .cargo-checksum.json in a crate/package.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 struct CargoChecksums {
@@ -305,12 +309,13 @@ fn sha256_hexdigest(buf: &[u8]) -> Result<String> {
 /// Steps:
 ///
 /// - Remove everything except Cargo.toml
-/// - Create a "stub" source directory with an empty src/lib.rs
+/// - Create a "stub" source directory whose src/lib.rs is a `compile_error!`
 /// - Regenerate the cargo checksums
 ///
-/// The generated package will fail to compile, but we're relying on it
-/// not actually being compiled.  Entirely removing the crates would
-/// require editing the dependent crates, which would be more involved.
+/// The generated package fails to compile, so a build that reaches a stub
+/// stops there instead of linking an empty crate.  Entirely removing the
+/// crates would require editing the dependent crates, which would be more
+/// involved.
 fn replace_with_stub(path: &Utf8Path) -> Result<()> {
     let cargo_toml_path = path.join(CARGO_TOML);
     let cargo_toml_data =
@@ -343,8 +348,8 @@ fn replace_with_stub(path: &Utf8Path) -> Result<()> {
     let cargo_toml_data = toml::to_string(&cargo_toml_data).context("Reserializing manifest")?;
     // An empty Cargo.toml
     writef(Utf8Path::new(CARGO_TOML), cargo_toml_data.as_bytes())?;
-    // And an empty source file
-    writef(Utf8Path::new(STUB_LIBRS), b"")?;
+    // And a source file that fails to compile
+    writef(Utf8Path::new(STUB_LIBRS), STUB_LIBRS_CONTENTS.as_bytes())?;
     // Finally, serialize the new checksums
     let mut w = std::fs::File::create(checksums_path).map(std::io::BufWriter::new)?;
     serde_json::to_writer(&mut w, &checksums)?;

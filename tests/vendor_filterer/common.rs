@@ -8,7 +8,7 @@ use anyhow::bail;
 use anyhow::Result;
 use camino;
 use camino::{Utf8Path, Utf8PathBuf};
-use cargo_vendor_filterer::{SELF_NAME, VERSIONED_DIRS};
+use cargo_vendor_filterer::{SELF_NAME, STUB_LIBRS_CONTENTS, VERSIONED_DIRS};
 
 // Return the project root
 pub(crate) fn project_root() -> Result<Utf8PathBuf> {
@@ -157,40 +157,39 @@ pub(crate) fn write_file_create_parents(
 }
 
 pub(crate) fn verify_no_windows(dir: &Utf8Path) {
-    let mut windows_lib = dir.join("windows-sys/src/lib.rs");
-    assert!(windows_lib.exists());
-    assert_eq!(windows_lib.metadata().unwrap().len(), 0);
-
-    // check that only one file exists
-    windows_lib.pop();
-    assert_eq!(windows_lib.read_dir_utf8().unwrap().count(), 1);
+    assert!(is_stub_source(&dir.join("windows-sys")));
 }
 
 pub(crate) fn verify_no_macos(dir: &Utf8Path) {
-    let mut macos_lib = dir.join("core-foundation-sys/src/lib.rs");
-    assert!(macos_lib.exists());
-    assert_eq!(macos_lib.metadata().unwrap().len(), 0);
-
-    // check that only one file exists
-    macos_lib.pop();
-    assert_eq!(macos_lib.read_dir_utf8().unwrap().count(), 1);
+    assert!(is_stub_source(&dir.join("core-foundation-sys")));
 }
 
 pub(crate) fn verify_crate_is_no_stub(output_folder: &Utf8Path, name: &str) {
     let crate_dir = output_folder.join(name);
     assert!(
         crate_dir.exists(),
-        "Package does not show up in the vendor dir"
+        "Package {name} does not show up in the vendor dir"
     );
     let crate_lib = crate_dir.join("src/lib.rs");
     assert!(
         crate_lib.exists(),
-        "Package has no src/lib.rs-file in the vendor dir"
+        "Package {name} has no src/lib.rs-file in the vendor dir"
     );
-    // Check that this was not filtered out
-    assert_ne!(
-        crate_lib.metadata().unwrap().len(),
-        0,
-        "Package was filtered out, when it shouldn't have been!"
+    assert!(
+        !is_stub_source(&crate_dir),
+        "Package {name} was filtered out, when it shouldn't have been!"
     );
+}
+
+/// Tells whether a crate directory holds a stub: `src` contains only the
+/// generated `lib.rs`, and that file is exactly the stub body.
+fn is_stub_source(crate_dir: &Utf8Path) -> bool {
+    let src = crate_dir.join("src");
+    let names: Vec<_> = src
+        .read_dir_utf8()
+        .expect("reading src/")
+        .map(|e| e.expect("reading src/ entry").file_name().to_owned())
+        .collect();
+    names == ["lib.rs"]
+        && fs::read_to_string(src.join("lib.rs")).expect("reading lib.rs") == STUB_LIBRS_CONTENTS
 }
