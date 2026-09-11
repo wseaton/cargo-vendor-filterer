@@ -159,7 +159,9 @@ pub(crate) fn write_file_create_parents(
 pub(crate) fn verify_no_windows(dir: &Utf8Path) {
     let mut windows_lib = dir.join("windows-sys/src/lib.rs");
     assert!(windows_lib.exists());
-    assert_eq!(windows_lib.metadata().unwrap().len(), 0);
+    assert!(fs::read_to_string(&windows_lib)
+        .unwrap()
+        .contains("compile_error!"));
 
     // check that only one file exists
     windows_lib.pop();
@@ -169,7 +171,9 @@ pub(crate) fn verify_no_windows(dir: &Utf8Path) {
 pub(crate) fn verify_no_macos(dir: &Utf8Path) {
     let mut macos_lib = dir.join("core-foundation-sys/src/lib.rs");
     assert!(macos_lib.exists());
-    assert_eq!(macos_lib.metadata().unwrap().len(), 0);
+    assert!(fs::read_to_string(&macos_lib)
+        .unwrap()
+        .contains("compile_error!"));
 
     // check that only one file exists
     macos_lib.pop();
@@ -188,9 +192,10 @@ pub(crate) fn verify_crate_is_no_stub(output_folder: &Utf8Path, name: &str) {
         "Package has no src/lib.rs-file in the vendor dir"
     );
     // Check that this was not filtered out
-    assert_ne!(
-        crate_lib.metadata().unwrap().len(),
-        0,
+    assert!(
+        !fs::read_to_string(&crate_lib)
+            .unwrap()
+            .contains("compile_error!"),
         "Package was filtered out, when it shouldn't have been!"
     );
 }
