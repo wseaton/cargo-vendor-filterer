@@ -58,6 +58,12 @@ pub const UNWANTED_PACKAGE_KEYS: &[&str] = &["links", "build", "default-run"];
 /// The path to the stub library file we write
 const STUB_LIBRS: &str = "src/lib.rs";
 
+/// The contents of the stub library file. Cargo still compiles a stub when a
+/// filtered-out dependency is enabled but unused, so fail the build instead of
+/// silently linking an empty crate.
+const STUB_LIBRS_CONTENTS: &str =
+    "compile_error!(\"this crate was replaced with a stub by cargo-vendor-filterer\");\n";
+
 /// This is the .cargo-checksum.json in a crate/package.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 struct CargoChecksums {
@@ -343,8 +349,8 @@ fn replace_with_stub(path: &Utf8Path) -> Result<()> {
     let cargo_toml_data = toml::to_string(&cargo_toml_data).context("Reserializing manifest")?;
     // An empty Cargo.toml
     writef(Utf8Path::new(CARGO_TOML), cargo_toml_data.as_bytes())?;
-    // And an empty source file
-    writef(Utf8Path::new(STUB_LIBRS), b"")?;
+    // And a source file that fails to compile
+    writef(Utf8Path::new(STUB_LIBRS), STUB_LIBRS_CONTENTS.as_bytes())?;
     // Finally, serialize the new checksums
     let mut w = std::fs::File::create(checksums_path).map(std::io::BufWriter::new)?;
     serde_json::to_writer(&mut w, &checksums)?;
