@@ -176,6 +176,8 @@ struct VendorFilter {
     no_default_features: bool,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     features: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    packages: Vec<String>,
     exclude_crate_paths: Option<HashSet<CrateExclude>>,
     keep_dep_kinds: Option<dep_kinds_filtering::DepKinds>,
 }
@@ -225,6 +227,13 @@ pub struct Args {
     /// specified features.
     #[arg(long, short = 'F')]
     pub features: Vec<String>,
+
+    /// Only keep crates reachable from this package, like `cargo build -p`.
+    /// May be specified multiple times; the union is kept. Feature flags apply
+    /// to every selected package, except `PACKAGE/FEATURE` naming a selected
+    /// package, which applies to that package only.
+    #[arg(long = "package", short = 'p', value_name = "SPEC")]
+    pub packages: Vec<String>,
 
     /// Dependencies kinds you want to keep: normal, build and/or development (dev).
     /// Possible values: all (default), normal, build, dev, no-normal, no-build, no-dev
@@ -445,6 +454,7 @@ impl VendorFilter {
             && !args.all_features
             && !args.no_default_features
             && args.features.is_empty()
+            && args.packages.is_empty()
             && args.exclude_crate_path.is_none()
             && args.keep_dep_kinds.is_none();
         let exclude_crate_paths = args
@@ -465,6 +475,7 @@ impl VendorFilter {
             all_features: args.all_features,
             no_default_features: args.no_default_features,
             features: args.features.clone(),
+            packages: args.packages.clone(),
             exclude_crate_paths,
             keep_dep_kinds: args.keep_dep_kinds,
         });
@@ -923,6 +934,35 @@ fn expand_platforms<'b>(
     Ok(r)
 }
 
+/// Expands the configured platforms and tier into concrete target triples.
+///
+/// Only a glob or a bare tier needs the target list, and without a tier that
+/// list comes from `rustc --print target-list`. Explicit platforms are used as
+/// they are, so this does not require a rust compiler.
+fn expand_config_platforms(config: &VendorFilter) -> Result<Vec<String>> {
+    match config.platforms.as_ref() {
+        Some(platforms) if !platforms.iter().any(|p| p.contains('*')) => {
+            Ok(platforms.iter().cloned().collect())
+        }
+        Some(platforms) => {
+            let target_list = get_target_list(config.tier.as_ref())?;
+            let target_list: Vec<(&str, ParsedPlatform)> = target_list
+                .iter()
+                .map(|platform| (platform.as_str(), platform.split('-').collect()))
+                .collect();
+            let platforms: Vec<_> = platforms.iter().map(|s| s.as_str()).collect();
+            expand_platforms(&platforms, &target_list)
+        }
+        None => {
+            // Here the user didn't provide a platform list; we're just filtering by tier.
+            assert!(config.tier.is_some());
+            let mut v: Vec<String> = get_target_list(config.tier.as_ref())?.into_iter().collect();
+            v.sort();
+            Ok(v)
+        }
+    }
+}
+
 /// Deletes unreferenced packages from the vendor directory.
 ///
 /// Returns the crates kept and the crates replaced with stubs.
@@ -999,6 +1039,11 @@ pub fn run(args: Args) -> Result<()> {
     if !had_config {
         eprintln!("NOTE: No vendor filtering enabled");
     }
+    if !config.packages.is_empty() && args.sync.is_some() {
+        anyhow::bail!(
+            "Package selection cannot be combined with --sync; vendor each manifest separately"
+        );
+    }
 
     let compression = match args.format {
         OutputTarget::Tar | OutputTarget::Dir => Compression::None,
@@ -1047,39 +1092,41 @@ pub fn run(args: Args) -> Result<()> {
     eprintln!("Gathering metadata for vendored packages");
     let vendored_dirs = get_vendored_package_dirs(&args)?;
     eprintln!("Gathering metadata for selected feature set");
-    let all_packages = get_packages_for_features(&args, &config)?;
+    let all_packages = if config.packages.is_empty() {
+        get_packages_for_features(&args, &config)?
+    } else {
+        let all_features = VendorFilter {
+            all_features: true,
+            ..Default::default()
+        };
+        get_packages_for_features(&args, &all_features)?
+    };
 
     // And now do the filtered set
     let mut packages = HashMap::new();
     let mut expanded_platforms = None;
-    if config.enables_platform_filtering() {
-        eprintln!("Gathering metadata for platforms");
-        // Only a glob or a bare tier needs the target list, and without a tier
-        // that list comes from `rustc --print target-list`. Explicit platforms
-        // are used as they are, so this does not require a rust compiler.
-        let platforms: Vec<String> = match config.platforms.as_ref() {
-            Some(platforms) if !platforms.iter().any(|p| p.contains('*')) => {
-                platforms.iter().cloned().collect()
-            }
-            Some(platforms) => {
-                let target_list = get_target_list(config.tier.as_ref())?;
-                let target_list: Vec<(&str, ParsedPlatform)> = target_list
-                    .iter()
-                    .map(|platform| (platform.as_str(), platform.split('-').collect()))
-                    .collect();
-                let platforms: Vec<_> = platforms.iter().map(|s| s.as_str()).collect();
-                expand_platforms(&platforms, &target_list)?
-            }
-            None => {
-                // Here the user didn't provide a platform list; we're just filtering by tier.
-                assert!(config.tier.is_some());
-                let mut v: Vec<String> = get_target_list(config.tier.as_ref())?
-                    .into_iter()
-                    .collect();
-                v.sort();
-                v
-            }
+    if !config.packages.is_empty() {
+        let platforms = if config.enables_platform_filtering() {
+            Some(expand_config_platforms(&config)?)
+        } else {
+            None
         };
+        eprintln!("Gathering packages reachable from {:?}", config.packages);
+        let required =
+            dep_kinds_filtering::packages_for_selection(&args, &config, platforms.as_deref())?;
+        for (id, package) in &all_packages {
+            let key = (
+                Cow::Borrowed(package.name.as_str()),
+                Cow::Borrowed(&package.version),
+            );
+            if required.contains(&key) {
+                packages.insert(id.clone(), package);
+            }
+        }
+        expanded_platforms = platforms;
+    } else if config.enables_platform_filtering() {
+        eprintln!("Gathering metadata for platforms");
+        let platforms = expand_config_platforms(&config)?;
         for platform in platforms.iter() {
             add_packages_for_platform(
                 &args,

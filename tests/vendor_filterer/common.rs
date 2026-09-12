@@ -74,6 +74,9 @@ pub(crate) struct VendorOptions<'a, 'b, 'c, 'd, 'e, 'f> {
     pub keep_dep_kinds: Option<&'static str>,
     pub current_dir: Option<&'f Utf8Path>,
     pub filter_report: Option<&'f Utf8Path>,
+    pub packages: &'static [&'static str],
+    pub features: &'static [&'static str],
+    pub no_default_features: bool,
 }
 
 /// Run a vendoring process
@@ -115,6 +118,15 @@ pub(crate) fn vendor(options: VendorOptions) -> Result<Output> {
     }
     if let Some(filter_report) = options.filter_report {
         cmd.arg(format!("--filter-report={filter_report}"));
+    }
+    for package in options.packages {
+        cmd.args(["--package", package]);
+    }
+    for feature in options.features {
+        cmd.args(["--features", feature]);
+    }
+    if options.no_default_features {
+        cmd.arg("--no-default-features");
     }
     if let Some(output) = options.output {
         cmd.arg(output);
@@ -184,22 +196,50 @@ pub(crate) fn verify_no_macos(dir: &Utf8Path) {
     assert_eq!(macos_lib.read_dir_utf8().unwrap().count(), 1);
 }
 
+pub(crate) fn verify_crate_is_stub(output_folder: &Utf8Path, name: &str) {
+    let crate_dir = output_folder.join(name);
+    assert!(
+        crate_dir.exists(),
+        "Package {name} does not show up in the vendor dir"
+    );
+    assert!(
+        is_stub_source(&crate_dir),
+        "Package {name} was kept, when it should have been filtered out!"
+    );
+}
+
 pub(crate) fn verify_crate_is_no_stub(output_folder: &Utf8Path, name: &str) {
     let crate_dir = output_folder.join(name);
     assert!(
         crate_dir.exists(),
-        "Package does not show up in the vendor dir"
+        "Package {name} does not show up in the vendor dir"
     );
     let crate_lib = crate_dir.join("src/lib.rs");
     assert!(
         crate_lib.exists(),
-        "Package has no src/lib.rs-file in the vendor dir"
+        "Package {name} has no src/lib.rs-file in the vendor dir"
     );
-    // Check that this was not filtered out
     assert!(
-        !fs::read_to_string(&crate_lib)
-            .unwrap()
-            .contains("compile_error!"),
-        "Package was filtered out, when it shouldn't have been!"
+        !is_stub_source(&crate_dir),
+        "Package {name} was filtered out, when it shouldn't have been!"
     );
+}
+
+/// Tells whether a crate directory holds a stub: `src` contains only the
+/// generated `lib.rs`, and that file is exactly the stub body. Matching on the
+/// contents alone would misread real crates such as `memchr`, whose own sources
+/// contain `compile_error!`.
+fn is_stub_source(crate_dir: &Utf8Path) -> bool {
+    let src = crate_dir.join("src");
+    let only_lib_rs = src
+        .read_dir_utf8()
+        .map(|entries| {
+            let names: Vec<_> = entries.filter_map(|e| e.ok()).collect();
+            names.len() == 1 && names[0].file_name() == "lib.rs"
+        })
+        .unwrap_or(false);
+    only_lib_rs
+        && fs::read_to_string(src.join("lib.rs"))
+            .map(|s| s.trim().is_empty() || s.contains("compile_error!"))
+            .unwrap_or(false)
 }

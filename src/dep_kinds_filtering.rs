@@ -91,35 +91,96 @@ pub(crate) fn filter_dep_kinds(
     Ok(())
 }
 
+/// Packages to keep, identified by name and version as printed by `cargo tree`.
+pub(crate) type RequiredPackages<'a> =
+    HashSet<(Cow<'a, str>, Cow<'a, cargo_metadata::semver::Version>)>;
+
+/// Returns the packages reachable from the selected packages, on each platform.
+pub(crate) fn packages_for_selection(
+    args: &Args,
+    config: &VendorFilter,
+    platforms: Option<&[String]>,
+) -> Result<RequiredPackages<'static>> {
+    let manifest_paths = args.get_all_manifest_paths();
+    let platforms: Vec<Option<&str>> = match platforms {
+        Some(platforms) => platforms.iter().map(|p| Some(p.as_str())).collect(),
+        None => vec![None],
+    };
+    let query = TreeQuery {
+        edges: config.keep_dep_kinds.unwrap_or(DepKinds::All),
+        packages: &config.packages,
+        all_features: config.all_features,
+        no_default_features: config.no_default_features,
+        features: config.features.iter().map(String::as_str).collect(),
+    };
+    let mut required_packages = HashSet::new();
+    for platform in &platforms {
+        required_packages.extend(cargo_tree(
+            &manifest_paths,
+            args.offline,
+            &query,
+            *platform,
+        )?);
+    }
+    Ok(required_packages)
+}
+
+/// A single `cargo tree` invocation, minus manifest path and platform.
+struct TreeQuery<'a> {
+    edges: DepKinds,
+    packages: &'a [String],
+    all_features: bool,
+    no_default_features: bool,
+    features: Vec<&'a str>,
+}
+
 /// Returns the set of required packages to satisfy filters specified in config
 fn get_required_packages<'a>(
     manifest_paths: &[Option<&Utf8Path>],
     offline: bool,
     config: &VendorFilter,
     platform: Option<&str>,
-) -> Result<HashSet<(Cow<'a, str>, Cow<'a, cargo_metadata::semver::Version>)>> {
-    let keep_dep_kinds = config.keep_dep_kinds.expect("keep_dep_kinds not set");
+) -> Result<RequiredPackages<'a>> {
+    let query = TreeQuery {
+        edges: config.keep_dep_kinds.unwrap_or(DepKinds::All),
+        packages: &[],
+        all_features: config.all_features,
+        no_default_features: config.no_default_features,
+        features: config.features.iter().map(String::as_str).collect(),
+    };
+    cargo_tree(manifest_paths, offline, &query, platform)
+}
+
+fn cargo_tree<'a>(
+    manifest_paths: &[Option<&Utf8Path>],
+    offline: bool,
+    query: &TreeQuery,
+    platform: Option<&str>,
+) -> Result<RequiredPackages<'a>> {
     let mut required_packages = HashSet::new();
     for manifest_path in manifest_paths {
         let mut cargo_tree = std::process::Command::new("cargo");
         cargo_tree
             .arg("tree")
             .args(["--quiet", "--prefix", "none"]) // ignore non-relevant output
-            .args(["--edges", &keep_dep_kinds.to_string()]); // key filter not available with metadata
+            .args(["--edges", &query.edges.to_string()]); // key filter not available with metadata
         if offline {
             cargo_tree.arg("--offline");
         }
         if let Some(manifest_path) = manifest_path {
             cargo_tree.args(["--manifest-path", manifest_path.as_str()]);
         }
-        if config.all_features {
+        for package in query.packages {
+            cargo_tree.args(["--package", package]);
+        }
+        if query.all_features {
             cargo_tree.arg("--all-features");
         }
-        if config.no_default_features {
+        if query.no_default_features {
             cargo_tree.arg("--no-default-features");
         }
-        if !config.features.is_empty() {
-            cargo_tree.arg("--features").args(&config.features);
+        if !query.features.is_empty() {
+            cargo_tree.arg("--features").arg(query.features.join(","));
         }
         match platform {
             Some(platform) => cargo_tree.arg(format!("--target={platform}")),
@@ -131,11 +192,12 @@ fn get_required_packages<'a>(
         let output = cargo_tree.output()?;
         if !output.status.success() {
             anyhow::bail!(
-                "Failed to execute cargo tree: {:?}",
-                String::from_utf8(output.stderr).expect("Invalid cargo tree output")
+                "Failed to execute cargo tree: {}",
+                String::from_utf8_lossy(&output.stderr)
             );
         }
-        let output_str = String::from_utf8(output.stdout).expect("Invalid cargo tree output");
+        let output_str =
+            String::from_utf8(output.stdout).context("cargo tree printed non-UTF-8 output")?;
         for line in output_str.lines() {
             if line.trim().is_empty() {
                 // `cargo tree` output from a `[workspace]` with multiple
@@ -181,7 +243,7 @@ mod tests {
             Some("x86_64-pc-windows-gnu"),
         )
         .unwrap();
-        assert_eq!(rp.len(), 3); // own package + once_cell + serial_test dev dependencies
+        assert_eq!(rp.len(), 4); // own package + once_cell + serde_json + serial_test dev dependencies
     }
 
     #[test]
