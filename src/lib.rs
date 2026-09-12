@@ -984,21 +984,31 @@ pub fn run(args: Args) -> Result<()> {
     let mut expanded_platforms = None;
     if config.enables_platform_filtering() {
         eprintln!("Gathering metadata for platforms");
-        let target_list = get_target_list(config.tier.as_ref())?;
-        let target_list: Vec<(&str, ParsedPlatform)> = target_list
-            .iter()
-            .map(|platform| (platform.as_str(), platform.split('-').collect()))
-            .collect();
-        // If the user provided an explicit platform list, it may have globs.  Expand it with the known target list.
-        let platforms: Vec<_> = if let Some(platforms) = config.platforms.as_ref() {
-            let platforms: Vec<_> = platforms.iter().map(|s| s.as_str()).collect();
-            expand_platforms(&platforms, &target_list)?
-        } else {
-            // Here the user didn't provide a platform list; we're just filtering by tier.
-            assert!(config.tier.is_some());
-            let mut v: Vec<_> = target_list.into_iter().map(|v| v.0.to_string()).collect();
-            v.sort();
-            v
+        // Only a glob or a bare tier needs the target list, and without a tier
+        // that list comes from `rustc --print target-list`. Explicit platforms
+        // are used as they are, so this does not require a rust compiler.
+        let platforms: Vec<String> = match config.platforms.as_ref() {
+            Some(platforms) if !platforms.iter().any(|p| p.contains('*')) => {
+                platforms.iter().cloned().collect()
+            }
+            Some(platforms) => {
+                let target_list = get_target_list(config.tier.as_ref())?;
+                let target_list: Vec<(&str, ParsedPlatform)> = target_list
+                    .iter()
+                    .map(|platform| (platform.as_str(), platform.split('-').collect()))
+                    .collect();
+                let platforms: Vec<_> = platforms.iter().map(|s| s.as_str()).collect();
+                expand_platforms(&platforms, &target_list)?
+            }
+            None => {
+                // Here the user didn't provide a platform list; we're just filtering by tier.
+                assert!(config.tier.is_some());
+                let mut v: Vec<String> = get_target_list(config.tier.as_ref())?
+                    .into_iter()
+                    .collect();
+                v.sort();
+                v
+            }
         };
         for platform in platforms.iter() {
             add_packages_for_platform(
