@@ -181,7 +181,7 @@ mod tests {
             Some("x86_64-pc-windows-gnu"),
         )
         .unwrap();
-        assert_eq!(rp.len(), 3); // own package + once_cell + serial_test dev dependencies
+        assert_eq!(rp.len(), 4); // own package + once_cell + serde_json + serial_test dev dependencies
     }
 
     #[test]
