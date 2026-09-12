@@ -73,6 +73,7 @@ pub(crate) struct VendorOptions<'a, 'b, 'c, 'd, 'e, 'f> {
     pub versioned_dirs: bool,
     pub keep_dep_kinds: Option<&'static str>,
     pub current_dir: Option<&'f Utf8Path>,
+    pub filter_report: Option<&'f Utf8Path>,
 }
 
 /// Run a vendoring process
@@ -111,6 +112,9 @@ pub(crate) fn vendor(options: VendorOptions) -> Result<Output> {
     }
     if let Some(keep_dep_kinds) = options.keep_dep_kinds {
         cmd.args(["--keep-dep-kinds", keep_dep_kinds]);
+    }
+    if let Some(filter_report) = options.filter_report {
+        cmd.arg(format!("--filter-report={filter_report}"));
     }
     if let Some(output) = options.output {
         cmd.arg(output);
