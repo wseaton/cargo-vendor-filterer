@@ -4,6 +4,7 @@ mod exclude;
 mod features;
 mod format;
 mod json;
+mod locked;
 mod package;
 mod platform;
 mod sync;

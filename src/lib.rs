@@ -511,7 +511,7 @@ fn gather_config(args: &Args) -> Result<Option<VendorFilter>> {
         return Ok(Some(f));
     };
     // Otherwise gather from `package.metadata.vendor-filter` in Cargo.toml
-    let meta = new_metadata_cmd(args.manifest_path.as_deref(), args.offline);
+    let meta = new_metadata_cmd(args.manifest_path.as_deref(), args, None);
     let meta = meta
         .exec()
         .context("Executing cargo metadata (first run)")?;
@@ -758,9 +758,17 @@ impl Args {
         all_manifest_paths
     }
 
+    /// Flags every cargo invocation takes, so none of them reaches the network or
+    /// rewrites `Cargo.lock` unless the caller allows it.
+    fn cargo_flags(&self) -> impl Iterator<Item = &'static str> {
+        [(self.offline, OFFLINE), (self.locked, LOCKED)]
+            .into_iter()
+            .filter_map(|(enabled, flag)| enabled.then_some(flag))
+    }
+
     /// Find the root package
     fn get_root_package(&self) -> Result<Option<Package>> {
-        let mut command = new_metadata_cmd(self.manifest_path.as_deref(), self.offline);
+        let mut command = new_metadata_cmd(self.manifest_path.as_deref(), self, None);
         command.no_deps();
 
         let meta = command.exec().context("Executing cargo metadata")?;
@@ -768,11 +776,17 @@ impl Args {
     }
 }
 
-fn new_metadata_cmd(path: Option<&Utf8Path>, offline: bool) -> MetadataCommand {
+fn new_metadata_cmd(
+    path: Option<&Utf8Path>,
+    args: &Args,
+    platform: Option<&str>,
+) -> MetadataCommand {
     let mut command = MetadataCommand::new();
-    if offline {
-        command.other_options(vec![OFFLINE.to_string()]);
+    let mut options: Vec<String> = args.cargo_flags().map(str::to_string).collect();
+    if let Some(platform) = platform {
+        options.push(format!("--filter-platform={platform}"));
     }
+    command.other_options(options);
     if let Some(p) = path {
         command.manifest_path(p);
     }
@@ -785,7 +799,7 @@ fn get_vendored_package_dirs(args: &Args) -> Result<HashMap<cargo_metadata::Pack
     let all_manifest_paths = args.get_all_manifest_paths();
     let mut pkgs_by_name: HashMap<_, Vec<_>> = HashMap::new();
     for manifest_path in all_manifest_paths {
-        let mut command = new_metadata_cmd(manifest_path, args.offline);
+        let mut command = new_metadata_cmd(manifest_path, args, None);
         command.features(AllFeatures);
         let meta = command.exec().context("Executing cargo metadata")?;
         meta.packages
@@ -839,7 +853,7 @@ fn get_packages_for_features(
     let all_manifest_paths = args.get_all_manifest_paths();
     let mut packages = HashMap::new();
     for manifest_path in all_manifest_paths {
-        let mut command = new_metadata_cmd(manifest_path, args.offline);
+        let mut command = new_metadata_cmd(manifest_path, args, None);
         if config.all_features {
             command.features(AllFeatures);
         }
@@ -922,7 +936,7 @@ fn add_packages_for_platform<'p>(
 ) -> Result<()> {
     let all_manifest_paths = args.get_all_manifest_paths();
     for manifest_path in all_manifest_paths {
-        let mut command = new_metadata_cmd(manifest_path, args.offline);
+        let mut command = new_metadata_cmd(manifest_path, args, platform);
         if config.all_features {
             command.features(AllFeatures);
         }
@@ -935,9 +949,6 @@ fn add_packages_for_platform<'p>(
             .filter(|features| !features.is_empty())
         {
             command.features(SomeFeatures(features.clone()));
-        }
-        if let Some(platform) = platform {
-            command.other_options(vec![format!("--filter-platform={platform}")]);
         }
 
         let meta = command.exec().context("Executing cargo metadata")?;
@@ -1237,8 +1248,7 @@ pub fn run(args: Args) -> Result<()> {
     let mut builder = Command::new("cargo");
     builder
         .args(["vendor"])
-        .args(args.offline.then_some(OFFLINE))
-        .args(args.locked.then_some(LOCKED))
+        .args(args.cargo_flags())
         .args(args.respect_source_config.then_some(RESPECT_SOURCE_CONFIG))
         .args(args.versioned_dirs.then_some(VERSIONED_DIRS))
         .args(manifest_path.iter().flatten());

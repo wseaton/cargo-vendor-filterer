@@ -9,7 +9,7 @@ use anyhow::Result;
 use camino;
 use camino::{Utf8Path, Utf8PathBuf};
 use cargo_vendor_filterer::{
-    CARGO_TOML, CARGO_TOML_PRE_VENDOR_FILTER, CONFIG_KEY, MANIFEST_KEY_PACKAGE, SELF_NAME,
+    CARGO_TOML, CARGO_TOML_PRE_VENDOR_FILTER, CONFIG_KEY, LOCKED, MANIFEST_KEY_PACKAGE, SELF_NAME,
     STUB_KEY, STUB_LIBRS_CONTENTS, STUB_REMOVED_PACKAGE_KEYS, UNWANTED_PACKAGE_KEYS,
     VERSIONED_DIRS,
 };
@@ -81,6 +81,7 @@ pub(crate) struct VendorOptions<'a, 'b, 'c, 'd, 'e, 'f, 'g> {
     pub packages: &'static [&'static str],
     pub features: &'static [&'static str],
     pub no_default_features: bool,
+    pub locked: bool,
 }
 
 /// Run a vendoring process
@@ -129,6 +130,9 @@ pub(crate) fn vendor(options: VendorOptions) -> Result<Output> {
     }
     if options.no_default_features {
         cmd.arg("--no-default-features");
+    }
+    if options.locked {
+        cmd.arg(LOCKED);
     }
     if let Some(output) = options.output {
         cmd.arg(output);

@@ -75,13 +75,8 @@ pub(crate) fn filter_dep_kinds(
         Some(_) => (),
     };
 
-    let required_packages = get_required_packages(
-        &args.get_all_manifest_paths(),
-        args.offline,
-        config,
-        &[],
-        platform,
-    )?;
+    let required_packages =
+        get_required_packages(&args.get_all_manifest_paths(), args, config, &[], platform)?;
 
     packages.retain(|_, package| {
         required_packages.contains(&(
@@ -112,7 +107,7 @@ pub(crate) fn packages_for_selection(
         .try_fold(RequiredPackages::new(), |mut required, platform| {
             required.extend(get_required_packages(
                 &manifest_paths,
-                args.offline,
+                args,
                 config,
                 &config.packages,
                 platform,
@@ -125,7 +120,7 @@ pub(crate) fn packages_for_selection(
 /// reachable from `packages` or, when empty, from every workspace member
 fn get_required_packages<'a>(
     manifest_paths: &[Option<&Utf8Path>],
-    offline: bool,
+    args: &Args,
     config: &VendorFilter,
     packages: &[String],
     platform: Option<&str>,
@@ -138,9 +133,7 @@ fn get_required_packages<'a>(
             .arg("tree")
             .args(["--quiet", "--prefix", "none"]) // ignore non-relevant output
             .args(["--edges", &keep_dep_kinds.to_string()]); // key filter not available with metadata
-        if offline {
-            cargo_tree.arg("--offline");
-        }
+        cargo_tree.args(args.cargo_flags());
         if let Some(manifest_path) = manifest_path {
             cargo_tree.args(["--manifest-path", manifest_path.as_str()]);
         }
@@ -216,7 +209,7 @@ mod tests {
         own_cargo_toml.push("Cargo.toml");
         let rp = get_required_packages(
             &[Some(&own_cargo_toml)],
-            false,
+            &Args::default(),
             &serde_json::from_value(json!({ "keep-dep-kinds": "dev"})).unwrap(),
             &[],
             Some("x86_64-pc-windows-gnu"),
@@ -231,7 +224,7 @@ mod tests {
         own_cargo_toml.push("Cargo.toml");
         let rp = get_required_packages(
             &[Some(&own_cargo_toml)],
-            false,
+            &Args::default(),
             &serde_json::from_value(json!({ "keep-dep-kinds": "all", "--all-features": true}))
                 .unwrap(),
             &[],
@@ -248,7 +241,7 @@ mod tests {
 
         let rp_normal = get_required_packages(
             &[Some(&own_cargo_toml)],
-            false,
+            &Args::default(),
             &serde_json::from_value(json!({ "keep-dep-kinds": "normal"})).unwrap(),
             &[],
             Some("x86_64-pc-windows-gnu"),
@@ -258,7 +251,7 @@ mod tests {
         // no-build => normal + dev dependencies, so including once_call, serial_test...
         let rp_no_build = get_required_packages(
             &[Some(&own_cargo_toml)],
-            false,
+            &Args::default(),
             &serde_json::from_value(json!({ "keep-dep-kinds": "no-build"})).unwrap(),
             &[],
             Some("x86_64-pc-windows-gnu"),
@@ -281,7 +274,7 @@ mod tests {
 
         let rp_build = get_required_packages(
             &[Some(&own_cargo_toml)],
-            false,
+            &Args::default(),
             &serde_json::from_value(json!({ "keep-dep-kinds": "build"})).unwrap(),
             &[],
             Some("x86_64-unknown-linux-gnu"),
@@ -291,7 +284,7 @@ mod tests {
         // no-dev => build + normal so the list shall be larger
         let rp_no_dev = get_required_packages(
             &[Some(&own_cargo_toml)],
-            false,
+            &Args::default(),
             &serde_json::from_value(json!({ "keep-dep-kinds": "no-dev"})).unwrap(),
             &[],
             Some("x86_64-unknown-linux-gnu"),
